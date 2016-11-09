@@ -4,6 +4,8 @@ var app = express();
 var mongodb = require('mongodb');
 var MongoClient = mongodb.MongoClient;
 
+var url = require('url');
+
 var connectDB = function(req, res, next) {
     MongoClient.connect(process.env.MONGOLAB_URI, function(err, db) {
        if (err) {
@@ -22,9 +24,14 @@ var connectDB = function(req, res, next) {
 }
 
 app.get(/^\/new\/(\w+\:\/{2}([^\s]+\.)+[^\s]+(:\d+)*$)+/, connectDB, function(req, res) {
-    var url = req.params['0'];
-    var id;
-    var jsonResponse = {'original_url': url, 'short_url': req.headers['host'] + '/'};
+    var target_url = req.params['0'];
+    
+    var requrl = url.format({
+        protocol: req.protocol,
+        hostname: req.hostname
+    });
+    
+    var jsonResponse = {'original_url': target_url, 'short_url': requrl + '/'};
     
     var collection = req.db.collection('urls');
     collection.findOne({url: url}, function(err, doc) {
@@ -35,15 +42,21 @@ app.get(/^\/new\/(\w+\:\/{2}([^\s]+\.)+[^\s]+(:\d+)*$)+/, connectDB, function(re
             res.send(JSON.stringify(jsonResponse));
         } else {
             console.log('New record, adding to DB.');
-            id = 1011;
-            collection.insertOne({id: id, url: url}, function(err, r) {
-                if (err) throw err;
-                jsonResponse.short_url += r.ops[0].id;
-                res.send(JSON.stringify(jsonResponse));
+            req.db.collection('counter')
+                .findAndModify({ _id: "nextid" }, [],
+                               { $inc: { seq: 1 } },
+                               { new: true }, 
+                    function(err, r) {
+                        if (err) throw err;
+                        collection.insertOne({ id: r.value.seq, url: target_url }, 
+                            function(err, r) {
+                                if (err) throw err;
+                                jsonResponse.short_url += r.ops[0].id;
+                                res.send(JSON.stringify(jsonResponse));
+                        });
             });
        }
     });
-    
 });
 
 app.get(['/new', '/new/:url*'], function(req, res) {
@@ -51,13 +64,14 @@ app.get(['/new', '/new/:url*'], function(req, res) {
 });
 
 app.get('/:id', connectDB, function(req, res) {
-    var id = req.params.id;
+    var id = +req.params.id;
     var collection = req.db.collection('urls');
     collection.findOne({id: id}, function(err, doc) {
-        if (err)
-            res.status(404).send(JSON.stringify({'error': 'This url is not on the database.'}));
-        else
+        if (err) throw err;
+        if (doc)
             res.redirect(doc.url);
+        else
+            res.status(404).send(JSON.stringify({'error': 'This url is not on the database.'}));
     });
 });
 
